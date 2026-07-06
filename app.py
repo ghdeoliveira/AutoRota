@@ -10,7 +10,8 @@ logging.basicConfig(level=logging.INFO)
 
 class GoogleFormsBotBrilhante2:
     def __init__(self, email, driver_id, telefone, palavras_prioritarias, palavras_bloqueadas):
-        self.ENTRY_EMAIL = 'emailAddress'
+        # ENTRIES DO FORMULÁRIO BRILHANTE 2
+        self.ENTRY_EMAIL = 'emailAddress'          # Campo especial do Google
         self.ENTRY_DRIVER_ID = 'entry.1941002046'
         self.ENTRY_TELEFONE = 'entry.1388004571'
         self.ENTRY_ROTA = 'entry.396510670'
@@ -38,6 +39,7 @@ class GoogleFormsBotBrilhante2:
         print(f"[{tipo.upper()}] {message}")
     
     def buscar_rotas_disponiveis(self):
+        """Busca as rotas disponíveis no formulário usando múltiplos métodos"""
         try:
             response = self.session.get(self.view_url, timeout=10)
             response.raise_for_status()
@@ -45,35 +47,89 @@ class GoogleFormsBotBrilhante2:
             
             rotas = []
             
-            # Busca via FB_PUBLIC_LOAD_DATA_
+            # MÉTODO 1: Busca via FB_PUBLIC_LOAD_DATA_
             fb_match = re.search(r'FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
             if fb_match:
                 try:
                     data = json.loads(fb_match.group(1))
+                    self.add_log("✅ Dados do formulário carregados via FB_PUBLIC_LOAD_DATA_", 'info')
+                    
+                    # Estrutura: data[1][1] contém as perguntas
                     if data and len(data) > 1 and data[1]:
                         questions = data[1][1] if len(data[1]) > 1 else []
+                        
                         for question in questions:
-                            if question and len(question) > 4 and question[4]:
-                                for opt in question[4]:
-                                    if opt and len(opt) > 0:
-                                        rota = opt[0] if opt[0] else (opt[1] if len(opt) > 1 else None)
-                                        if rota and rota != '.' and rota not in rotas and len(rota) > 2:
-                                            rotas.append(rota)
+                            if question and isinstance(question, list):
+                                # Título da pergunta (pode estar em diferentes posições)
+                                titulo = ""
+                                if len(question) > 0 and question[0]:
+                                    titulo = str(question[0])
+                                
+                                # Verifica se é a pergunta das rotas
+                                if 'rota' in titulo.lower() or 'selecione' in titulo.lower():
+                                    self.add_log(f"🔍 Encontrada pergunta: {titulo}", 'info')
+                                    
+                                    # As opções estão na posição 4
+                                    if len(question) > 4 and question[4]:
+                                        for opt in question[4]:
+                                            if opt and isinstance(opt, list) and len(opt) > 0:
+                                                # O texto da opção pode estar em opt[0] ou opt[1]
+                                                rota = opt[0] if opt[0] else (opt[1] if len(opt) > 1 else None)
+                                                if rota and rota != '.' and rota not in rotas and len(str(rota)) > 2:
+                                                    rotas.append(str(rota))
                 except Exception as e:
-                    pass
+                    self.add_log(f"⚠️ Erro ao parsear FB_PUBLIC_LOAD_DATA: {e}", 'warning')
             
+            # MÉTODO 2: Fallback - busca por data-value no HTML
+            if not rotas:
+                self.add_log("🔍 Método 2: Buscando por data-value no HTML", 'info')
+                radio_pattern = r'<div[^>]*data-value="([^"]*)"[^>]*role="radio"[^>]*>'
+                matches = re.findall(radio_pattern, html)
+                for value in matches:
+                    if value and value != '.' and value not in rotas and len(value) > 2:
+                        rotas.append(value)
+            
+            # MÉTODO 3: Fallback - busca por spans com texto
+            if not rotas:
+                self.add_log("🔍 Método 3: Buscando por spans com texto", 'info')
+                span_pattern = r'<span[^>]*class="[^"]*"[^>]*>([^<]*(?:Camboriú|BC|Itajaí|Brusque|CEDROS|CENTRO|NOVA|MONTE|NAÇÕES)[^<]*)</span>'
+                matches = re.findall(span_pattern, html, re.IGNORECASE)
+                for match in matches:
+                    match = match.strip()
+                    if match and match not in rotas and len(match) > 2:
+                        rotas.append(match)
+            
+            # Remove duplicatas mantendo ordem
             rotas = list(dict.fromkeys(rotas))
+            
+            if rotas:
+                self.add_log(f"✅ {len(rotas)} rotas encontradas!", 'success')
+            else:
+                self.add_log("⚠️ Nenhuma rota encontrada!", 'warning')
+                # Salva HTML para debug (opcional)
+                with open('debug_form.html', 'w', encoding='utf-8') as f:
+                    f.write(html)
+                self.add_log("📁 HTML salvo em 'debug_form.html' para análise", 'info')
+            
             return rotas
+            
         except Exception as e:
-            self.add_log(f"Erro ao buscar rotas: {e}", 'error')
+            self.add_log(f"❌ Erro ao buscar rotas: {e}", 'error')
             return []
     
     def selecionar_melhor_rota(self, rotas):
+        """Seleciona a melhor rota baseada nas palavras"""
         if not rotas:
             return None
         
         self.add_log("🔍 Analisando rotas disponíveis...", 'info')
         
+        # Mostra todas as rotas
+        self.add_log(f"📋 Rotas disponíveis: {len(rotas)}", 'info')
+        for i, rota in enumerate(rotas, 1):
+            self.add_log(f"  {i}. {rota}", 'info')
+        
+        # Filtra rotas bloqueadas
         rotas_liberadas = []
         for rota in rotas:
             bloqueada = False
@@ -87,19 +143,23 @@ class GoogleFormsBotBrilhante2:
                 self.add_log(f"✅ LIBERADA: {rota}", 'success')
         
         if not rotas_liberadas:
+            self.add_log("❌ Todas as rotas foram bloqueadas!", 'error')
             return None
         
+        # Tenta encontrar rota com palavra prioritária (em ordem)
         for palavra in self.palavras_prioritarias:
             for rota in rotas_liberadas:
                 if palavra.lower() in rota.lower():
                     self.add_log(f"🎯 ESCOLHIDA: {rota} (contém: {palavra})", 'success')
                     return rota
         
+        # Fallback: primeira rota liberada
         rota = rotas_liberadas[0]
-        self.add_log(f"⚠️ Usando primeira disponível: {rota}", 'warning')
+        self.add_log(f"⚠️ Nenhuma palavra prioritária. Usando primeira: {rota}", 'warning')
         return rota
     
     def pegar_fbzx(self):
+        """Captura o token de segurança fbzx"""
         try:
             response = self.session.get(self.view_url, timeout=10)
             match = re.search(r'fbzx" value="([^"]+)"', response.text)
@@ -108,6 +168,7 @@ class GoogleFormsBotBrilhante2:
             return None
     
     def enviar_formulario(self, rota):
+        """Envia o formulário com a rota escolhida"""
         payload = {
             self.ENTRY_EMAIL: self.email,
             self.ENTRY_DRIVER_ID: self.driver_id,
@@ -127,6 +188,7 @@ class GoogleFormsBotBrilhante2:
         }
         
         try:
+            self.add_log(f"📤 Enviando formulário com rota: {rota}", 'info')
             response = self.session.post(
                 self.submit_url,
                 data=payload,
@@ -138,40 +200,52 @@ class GoogleFormsBotBrilhante2:
             if response.status_code in [200, 301, 302]:
                 self.add_log(f"✅ FORMULÁRIO ENVIADO COM SUCESSO!", 'success')
                 self.add_log(f"📍 Rota: {rota}", 'success')
+                self.add_log(f"📊 Status HTTP: {response.status_code}", 'info')
                 return True
             else:
                 self.add_log(f"❌ Falha no envio. Status: {response.status_code}", 'error')
                 return False
         except Exception as e:
-            self.add_log(f"❌ Erro: {e}", 'error')
+            self.add_log(f"❌ Erro no envio: {e}", 'error')
             return False
     
     def executar(self):
+        """Executa o bot completo"""
         self.logs = []
+        self.add_log("━" * 50, 'info')
         self.add_log("🚀 Iniciando Brilhante 2 Bot", 'info')
+        self.add_log("━" * 50, 'info')
         self.add_log(f"📧 Email: {self.email}", 'info')
         self.add_log(f"🆔 Driver ID: {self.driver_id}", 'info')
         self.add_log(f"📱 Telefone: {self.telefone}", 'info')
+        self.add_log(f"🎯 Prioridades: {', '.join(self.palavras_prioritarias)}", 'info')
+        self.add_log(f"🚫 Bloqueadas: {', '.join(self.palavras_bloqueadas)}", 'info')
+        self.add_log("━" * 50, 'info')
         
+        # Busca rotas disponíveis
         rotas = self.buscar_rotas_disponiveis()
         
         if not rotas:
             self.add_log("❌ Nenhuma rota disponível no momento!", 'error')
             return {'sucesso': False, 'logs': self.logs}
         
-        self.add_log(f"📋 Rotas disponíveis: {len(rotas)}", 'info')
-        for rota in rotas:
-            self.add_log(f"  - {rota}", 'info')
-        
+        # Seleciona a melhor rota
         rota_escolhida = self.selecionar_melhor_rota(rotas)
         
         if not rota_escolhida:
             self.add_log("❌ Nenhuma rota atende aos critérios!", 'error')
             return {'sucesso': False, 'logs': self.logs}
         
+        # Envia o formulário
         if self.enviar_formulario(rota_escolhida):
+            self.add_log("━" * 50, 'info')
+            self.add_log(f"🎉 PROCESSO FINALIZADO COM SUCESSO!", 'success')
+            self.add_log("━" * 50, 'info')
             return {'sucesso': True, 'rota': rota_escolhida, 'logs': self.logs}
         else:
+            self.add_log("━" * 50, 'info')
+            self.add_log(f"❌ PROCESSO FINALIZADO COM FALHA!", 'error')
+            self.add_log("━" * 50, 'info')
             return {'sucesso': False, 'logs': self.logs}
 
 
@@ -202,5 +276,17 @@ def enviar():
     return jsonify(resultado)
 
 
+@app.route('/api/rotas', methods=['GET'])
+def listar_rotas():
+    """Endpoint para listar as rotas disponíveis sem enviar"""
+    bot = GoogleFormsBotBrilhante2('', '', '', [], [])
+    rotas = bot.buscar_rotas_disponiveis()
+    return jsonify({'rotas': rotas})
+
+
 if __name__ == '__main__':
+    print("=" * 50)
+    print("🚀 Brilhante 2 Bot - Servidor Rodando!")
+    print("📍 Acesse: http://localhost:5000")
+    print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
