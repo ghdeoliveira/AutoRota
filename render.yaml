@@ -1,8 +1,8 @@
-# render.yaml
 services:
   - type: web
     name: autorota
     runtime: python
+    plan: free
     buildCommand: |
       pip install -r requirements.txt
       playwright install chromium
@@ -13,3 +13,11 @@ services:
         value: /opt/render/project/src/.cache/ms-playwright
       - key: PYTHON_VERSION
         value: 3.10.0
+      - key: FLASK_ENV
+        value: production
+    buildFilter:
+      paths:
+        - app.py
+        - templates/**
+        - static/**
+        - requirements.txt
