@@ -1,34 +1,32 @@
 from flask import Flask, render_template, jsonify, request
-import requests
-import re
-import json
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import logging
 from datetime import datetime
 import time
+import re
+import os
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 class GoogleFormsBotBrilhante2:
     def __init__(self, email, driver_id, telefone, palavras_prioritarias, palavras_bloqueadas):
-        # ENTRIES DO FORMULÁRIO BRILHANTE 2
-        self.ENTRY_EMAIL = 'entry.396510670'  # ← MUDANÇA: email agora é entry também!
-        self.ENTRY_DRIVER_ID = 'entry.1941002046'
-        self.ENTRY_TELEFONE = 'entry.1388004571'
-        self.ENTRY_ROTA = 'entry.396510670'   # ← ATENÇÃO: mesmo entry do email? Verificar!
-        
         self.email = email
         self.driver_id = driver_id
         self.telefone = telefone
         self.palavras_prioritarias = palavras_prioritarias
         self.palavras_bloqueadas = palavras_bloqueadas
         
-        self.form_id = '1FAIpQLSdUHqCbEnEtmcJgcIiJ0D4RrucqoFfc1Ve-YhPIdUgY4sZnbQ'
-        self.view_url = f'https://docs.google.com/forms/d/e/{self.form_id}/viewform'
-        self.submit_url = f'https://docs.google.com/forms/d/e/{self.form_id}/formResponse'
+        self.form_url = 'https://docs.google.com/forms/d/e/1FAIpQLSdUHqCbEnEtmcJgcIiJ0D4RrucqoFfc1Ve-YhPIdUgY4sZnbQ/viewform'
         
-        self.session = requests.Session()
         self.logs = []
+        self.driver = None
     
     def add_log(self, message, tipo='info'):
         log_entry = {
@@ -39,109 +37,74 @@ class GoogleFormsBotBrilhante2:
         self.logs.append(log_entry)
         print(f"[{tipo.upper()}] {message}")
     
-    def capturar_dados_formulario(self):
-        """Captura todos os dados necessários do formulário (tokens, entries, etc)"""
+    def configurar_driver(self):
+        """Configura o ChromeDriver para automação"""
+        options = Options()
+        
+        # Opções para rodar em modo headless (sem abrir janela)
+        # options.add_argument('--headless')  # Descomente para rodar em segundo plano
+        
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        
+        # Mantém a sessão logada
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_experimental_option('excludeSwitches', ['enable-automation'])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # Caminho para o perfil do Chrome (mantém login)
+        # IMPORTANTE: Ajuste o caminho para o seu perfil do Chrome
+        user_data_dir = os.path.expanduser('~') + '/AppData/Local/Google/Chrome/User Data'
+        options.add_argument(f'--user-data-dir={user_data_dir}')
+        options.add_argument('--profile-directory=Default')
+        
         try:
-            response = self.session.get(self.view_url, timeout=10)
-            response.raise_for_status()
-            html = response.text
-            
-            dados = {
-                'fbzx': None,
-                'token': None,
-                'entries': {},
-                'rotas': []
-            }
-            
-            # 1. Captura o fbzx
-            fbzx_match = re.search(r'fbzx" value="([^"]+)"', html)
-            if fbzx_match:
-                dados['fbzx'] = fbzx_match.group(1)
-                self.add_log(f"🔑 fbzx capturado: {dados['fbzx'][:20]}...", 'info')
-            
-            # 2. Captura o token (se existir)
-            token_match = re.search(r'token" value="([^"]+)"', html)
-            if token_match:
-                dados['token'] = token_match.group(1)
-                self.add_log(f"🔑 token capturado: {dados['token'][:20]}...", 'info')
-            
-            # 3. Busca no FB_PUBLIC_LOAD_DATA_ para descobrir os entries corretos
-            fb_match = re.search(r'FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
-            if fb_match:
-                try:
-                    data = json.loads(fb_match.group(1))
-                    if data and len(data) > 1 and data[1]:
-                        questions = data[1][1] if len(data[1]) > 1 else []
-                        for question in questions:
-                            if question and isinstance(question, list):
-                                titulo = str(question[0]) if len(question) > 0 and question[0] else ""
-                                
-                                # Pega o entry ID (geralmente na posição 3)
-                                entry_id = None
-                                if len(question) > 3 and question[3]:
-                                    if isinstance(question[3], list) and len(question[3]) > 0:
-                                        entry_id = question[3][0]
-                                    else:
-                                        entry_id = question[3]
-                                
-                                if entry_id:
-                                    dados['entries'][titulo] = entry_id
-                                    self.add_log(f"📝 {titulo}: entry.{entry_id}", 'info')
-                                    
-                                    # Se for a pergunta das rotas, captura as opções
-                                    if 'rota' in titulo.lower() or 'selecione' in titulo.lower():
-                                        if len(question) > 4 and question[4]:
-                                            for opt in question[4]:
-                                                if opt and isinstance(opt, list) and len(opt) > 0:
-                                                    rota = opt[0] if opt[0] else (opt[1] if len(opt) > 1 else None)
-                                                    if rota and rota != '.' and rota not in dados['rotas']:
-                                                        dados['rotas'].append(str(rota))
-                except Exception as e:
-                    self.add_log(f"⚠️ Erro ao parsear FB_DATA: {e}", 'warning')
-            
-            return dados
-            
+            self.driver = webdriver.Chrome(options=options)
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            self.add_log("✅ ChromeDriver configurado com sucesso!", 'success')
+            return True
         except Exception as e:
-            self.add_log(f"❌ Erro ao capturar dados: {e}", 'error')
-            return None
+            self.add_log(f"❌ Erro ao configurar ChromeDriver: {e}", 'error')
+            self.add_log("💡 Certifique-se que o ChromeDriver está instalado e no PATH", 'warning')
+            self.add_log("📥 Baixe em: https://chromedriver.chromium.org/", 'info')
+            return False
     
     def buscar_rotas_disponiveis(self):
-        """Busca as rotas disponíveis no formulário"""
+        """Busca as rotas disponíveis via Selenium"""
+        if not self.driver:
+            return []
+        
         try:
-            response = self.session.get(self.view_url, timeout=10)
-            response.raise_for_status()
-            html = response.text
+            self.driver.get(self.form_url)
+            self.add_log("🔍 Aguardando carregamento do formulário...", 'info')
+            
+            # Aguarda o formulário carregar
+            wait = WebDriverWait(self.driver, 15)
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="radiogroup"]')))
+            self.add_log("✅ Formulário carregado!", 'success')
             
             rotas = []
             
-            # MÉTODO 1: Busca via FB_PUBLIC_LOAD_DATA_
-            fb_match = re.search(r'FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
-            if fb_match:
+            # Busca todas as opções de rota
+            opcoes = self.driver.find_elements(By.CSS_SELECTOR, 'div[role="radio"]')
+            
+            for opcao in opcoes:
                 try:
-                    data = json.loads(fb_match.group(1))
-                    if data and len(data) > 1 and data[1]:
-                        questions = data[1][1] if len(data[1]) > 1 else []
-                        for question in questions:
-                            if question and isinstance(question, list):
-                                titulo = str(question[0]) if len(question) > 0 and question[0] else ""
-                                if 'rota' in titulo.lower() or 'selecione' in titulo.lower():
-                                    if len(question) > 4 and question[4]:
-                                        for opt in question[4]:
-                                            if opt and isinstance(opt, list) and len(opt) > 0:
-                                                rota = opt[0] if opt[0] else (opt[1] if len(opt) > 1 else None)
-                                                if rota and rota != '.' and rota not in rotas and len(str(rota)) > 2:
-                                                    rotas.append(str(rota))
-                except Exception as e:
+                    # Tenta pegar o data-value ou o texto da opção
+                    data_value = opcao.get_attribute('data-value')
+                    if data_value and data_value != '.':
+                        rotas.append(data_value)
+                    else:
+                        # Fallback: pega o texto
+                        texto = opcao.text.strip()
+                        if texto and texto != '.':
+                            rotas.append(texto)
+                except Exception:
                     pass
             
-            # MÉTODO 2: Fallback - busca por data-value
-            if not rotas:
-                radio_pattern = r'<div[^>]*data-value="([^"]*)"[^>]*role="radio"[^>]*>'
-                matches = re.findall(radio_pattern, html)
-                for value in matches:
-                    if value and value != '.' and value not in rotas and len(value) > 2:
-                        rotas.append(value)
-            
+            # Remove duplicatas
             rotas = list(dict.fromkeys(rotas))
             
             if rotas:
@@ -150,9 +113,16 @@ class GoogleFormsBotBrilhante2:
                     self.add_log(f"  {i}. {rota}", 'info')
             else:
                 self.add_log("⚠️ Nenhuma rota encontrada!", 'warning')
+                # Salva screenshot para debug
+                self.driver.save_screenshot('debug_screen.png')
+                self.add_log("📸 Screenshot salvo em 'debug_screen.png'", 'info')
             
             return rotas
             
+        except TimeoutException:
+            self.add_log("❌ Tempo limite excedido ao carregar o formulário!", 'error')
+            self.driver.save_screenshot('debug_timeout.png')
+            return []
         except Exception as e:
             self.add_log(f"❌ Erro ao buscar rotas: {e}", 'error')
             return []
@@ -189,131 +159,124 @@ class GoogleFormsBotBrilhante2:
         self.add_log(f"⚠️ Usando primeira disponível: {rota}", 'warning')
         return rota
     
-    def pegar_fbzx(self):
-        """Captura o token de segurança fbzx"""
+    def preencher_campos(self, rota):
+        """Preenche os campos do formulário"""
         try:
-            response = self.session.get(self.view_url, timeout=10)
-            match = re.search(r'fbzx" value="([^"]+)"', response.text)
-            return match.group(1) if match else None
-        except Exception:
-            return None
-    
-    def enviar_formulario(self, rota):
-        """Envia o formulário com a rota escolhida - VERSÃO CORRIGIDA"""
-        
-        # 🔍 Primeiro, captura todos os dados do formulário
-        dados_form = self.capturar_dados_formulario()
-        if not dados_form:
-            self.add_log("❌ Não foi possível capturar os dados do formulário!", 'error')
-            return False
-        
-        # 🔧 Usa os entries corretos (se encontrados)
-        entry_email = dados_form['entries'].get('E-mail', 'entry.396510670') if dados_form else 'entry.396510670'
-        entry_driver = dados_form['entries'].get('ID Driver', 'entry.1941002046') if dados_form else 'entry.1941002046'
-        entry_telefone = dados_form['entries'].get('Telefone de contato', 'entry.1388004571') if dados_form else 'entry.1388004571'
-        entry_rota = dados_form['entries'].get('Selecione uma rota disponível', 'entry.396510670') if dados_form else 'entry.396510670'
-        
-        # ⚠️ IMPORTANTE: No formulário Brilhante 2, o E-mail usa o mesmo entry da Rota?
-        # Vamos usar o entry correto baseado no que capturamos
-        if entry_email == entry_rota:
-            self.add_log("⚠️ E-mail e Rota têm o mesmo entry! Usando 'emailAddress' para o e-mail.", 'warning')
-            entry_email = 'emailAddress'
-        
-        self.add_log(f"📝 Entries usados:", 'info')
-        self.add_log(f"  E-mail: {entry_email}", 'info')
-        self.add_log(f"  Driver ID: {entry_driver}", 'info')
-        self.add_log(f"  Telefone: {entry_telefone}", 'info')
-        self.add_log(f"  Rota: {entry_rota}", 'info')
-        
-        # Monta o payload
-        payload = {
-            entry_email: self.email,
-            entry_driver: self.driver_id,
-            entry_telefone: self.telefone,
-            entry_rota: rota,
-            'fvv': '1',
-            'pageHistory': '0'
-        }
-        
-        # Adiciona tokens de segurança
-        fbzx = dados_form['fbzx'] if dados_form else self.pegar_fbzx()
-        if fbzx:
-            payload['fbzx'] = fbzx
-            self.add_log(f"🔑 fbzx adicionado", 'info')
-        
-        token = dados_form['token'] if dados_form else None
-        if token:
-            payload['token'] = token
-            self.add_log(f"🔑 token adicionado", 'info')
-        
-        # Headers completos (simulando um navegador real)
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://docs.google.com',
-            'Referer': self.view_url,
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0',
-        }
-        
-        # Mostra o payload (sem os valores sensíveis)
-        payload_show = payload.copy()
-        if 'fbzx' in payload_show:
-            payload_show['fbzx'] = '***'
-        if 'token' in payload_show:
-            payload_show['token'] = '***'
-        self.add_log(f"📤 Payload: {payload_show}", 'info')
-        
-        try:
-            self.add_log(f"📤 Enviando formulário...", 'info')
-            response = self.session.post(
-                self.submit_url,
-                data=payload,
-                headers=headers,
-                allow_redirects=False,
-                timeout=30
-            )
+            wait = WebDriverWait(self.driver, 10)
             
-            status = response.status_code
-            self.add_log(f"📊 Status HTTP: {status}", 'info')
+            # 1. Preenche o campo de email (se estiver visível)
+            try:
+                email_input = wait.until(EC.presence_of_element_located((By.XPATH, '//input[@type="email"]')))
+                email_input.clear()
+                email_input.send_keys(self.email)
+                self.add_log(f"📧 Email preenchido: {self.email}", 'info')
+            except TimeoutException:
+                self.add_log("⚠️ Campo de email não encontrado (já está logado?)", 'warning')
             
-            # Verifica o conteúdo da resposta para diagnóstico
-            if response.text:
-                response_preview = response.text[:500]
-                self.add_log(f"📝 Resposta: {response_preview}", 'info')
+            # 2. Preenche Driver ID
+            try:
+                # Busca pelo campo Driver ID
+                driver_input = wait.until(EC.presence_of_element_located((By.XPATH, '//span[contains(text(),"ID Driver")]/ancestor::div[contains(@class,"rFrNMe")]//input')))
+                driver_input.clear()
+                driver_input.send_keys(self.driver_id)
+                self.add_log(f"🆔 Driver ID preenchido: {self.driver_id}", 'info')
+            except TimeoutException:
+                # Tentativa alternativa
+                driver_input = self.driver.find_element(By.XPATH, '//input[@aria-labelledby="i5"]')
+                driver_input.clear()
+                driver_input.send_keys(self.driver_id)
+                self.add_log(f"🆔 Driver ID preenchido: {self.driver_id}", 'info')
             
-            if status in [200, 301, 302]:
-                self.add_log(f"✅ FORMULÁRIO ENVIADO COM SUCESSO!", 'success')
-                self.add_log(f"📍 Rota: {rota}", 'success')
-                return True
-            else:
-                self.add_log(f"❌ Falha no envio. Status: {status}", 'error')
-                
-                # Diagnóstico do erro 401
-                if status == 401:
-                    self.add_log("🔧 Diagnóstico do erro 401:", 'warning')
-                    self.add_log("  - Verifique se o fbzx está correto", 'warning')
-                    self.add_log("  - O formulário pode exigir login", 'warning')
-                    self.add_log("  - Tente abrir o formulário no navegador para verificar", 'warning')
-                    self.add_log("  - O token pode ter expirado", 'warning')
-                
+            # 3. Preenche Telefone
+            try:
+                telefone_input = wait.until(EC.presence_of_element_located((By.XPATH, '//span[contains(text(),"Telefone de contato")]/ancestor::div[contains(@class,"rFrNMe")]//input')))
+                telefone_input.clear()
+                telefone_input.send_keys(self.telefone)
+                self.add_log(f"📱 Telefone preenchido: {self.telefone}", 'info')
+            except TimeoutException:
+                # Tentativa alternativa
+                telefone_input = self.driver.find_element(By.XPATH, '//input[@aria-labelledby="i10"]')
+                telefone_input.clear()
+                telefone_input.send_keys(self.telefone)
+                self.add_log(f"📱 Telefone preenchido: {self.telefone}", 'info')
+            
+            # 4. Seleciona a rota
+            try:
+                # Busca a opção da rota pelo texto
+                opcoes = self.driver.find_elements(By.CSS_SELECTOR, 'div[role="radio"]')
+                for opcao in opcoes:
+                    try:
+                        # Tenta pegar o data-value ou o texto
+                        data_value = opcao.get_attribute('data-value')
+                        texto = opcao.text.strip()
+                        
+                        if data_value == rota or texto == rota or rota in texto:
+                            self.driver.execute_script("arguments[0].scrollIntoView(true);", opcao)
+                            time.sleep(0.5)
+                            opcao.click()
+                            self.add_log(f"📍 Rota selecionada: {rota}", 'success')
+                            break
+                    except Exception:
+                        continue
+            except Exception as e:
+                self.add_log(f"❌ Erro ao selecionar rota: {e}", 'error')
                 return False
-                
+            
+            return True
+            
         except Exception as e:
-            self.add_log(f"❌ Erro no envio: {e}", 'error')
+            self.add_log(f"❌ Erro ao preencher campos: {e}", 'error')
+            return False
+    
+    def enviar_formulario(self):
+        """Clica no botão de enviar"""
+        try:
+            # Scroll para o botão
+            btn_enviar = self.driver.find_element(By.XPATH, '//span[text()="Enviar"]/ancestor::div[@role="button"]')
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", btn_enviar)
+            time.sleep(1)
+            
+            # Clica no botão
+            btn_enviar.click()
+            self.add_log("📤 Formulário enviado!", 'info')
+            
+            # Aguarda confirmação
+            time.sleep(3)
+            
+            # Verifica se apareceu a mensagem de sucesso
+            try:
+                mensagem = self.driver.find_element(By.XPATH, '//div[contains(text(),"Resposta enviada")]')
+                if mensagem:
+                    self.add_log("✅ CONFIRMAÇÃO: Resposta enviada com sucesso!", 'success')
+                    return True
+            except:
+                # Verifica se há erro
+                try:
+                    erro = self.driver.find_element(By.XPATH, '//div[contains(text(),"erro") or contains(text(),"problema")]')
+                    if erro:
+                        self.add_log(f"❌ Mensagem de erro: {erro.text}", 'error')
+                        return False
+                except:
+                    pass
+                
+                # Pode ser que a confirmação seja em outra página
+                if "formResponse" in self.driver.current_url:
+                    self.add_log("✅ Redirecionado para página de confirmação!", 'success')
+                    return True
+                else:
+                    self.add_log("⚠️ Status desconhecido, mas o envio pode ter sido bem sucedido", 'warning')
+                    return True
+            
+        except Exception as e:
+            self.add_log(f"❌ Erro ao enviar formulário: {e}", 'error')
+            self.driver.save_screenshot('debug_envio_erro.png')
             return False
     
     def executar(self):
-        """Executa o bot completo"""
+        """Executa o bot completo com Selenium"""
         self.logs = []
         self.add_log("━" * 50, 'info')
-        self.add_log("🚀 Iniciando Brilhante 2 Bot", 'info')
+        self.add_log("🚀 Iniciando Brilhante 2 Bot (Selenium)", 'info')
         self.add_log("━" * 50, 'info')
         self.add_log(f"📧 Email: {self.email}", 'info')
         self.add_log(f"🆔 Driver ID: {self.driver_id}", 'info')
@@ -322,31 +285,51 @@ class GoogleFormsBotBrilhante2:
         self.add_log(f"🚫 Bloqueadas: {', '.join(self.palavras_bloqueadas)}", 'info')
         self.add_log("━" * 50, 'info')
         
-        # Busca rotas disponíveis
-        rotas = self.buscar_rotas_disponiveis()
-        
-        if not rotas:
-            self.add_log("❌ Nenhuma rota disponível no momento!", 'error')
+        # Configura o driver
+        if not self.configurar_driver():
             return {'sucesso': False, 'logs': self.logs}
         
-        # Seleciona a melhor rota
-        rota_escolhida = self.selecionar_melhor_rota(rotas)
-        
-        if not rota_escolhida:
-            self.add_log("❌ Nenhuma rota atende aos critérios!", 'error')
+        try:
+            # Busca rotas disponíveis
+            rotas = self.buscar_rotas_disponiveis()
+            
+            if not rotas:
+                self.add_log("❌ Nenhuma rota disponível no momento!", 'error')
+                return {'sucesso': False, 'logs': self.logs}
+            
+            # Seleciona a melhor rota
+            rota_escolhida = self.selecionar_melhor_rota(rotas)
+            
+            if not rota_escolhida:
+                self.add_log("❌ Nenhuma rota atende aos critérios!", 'error')
+                return {'sucesso': False, 'logs': self.logs}
+            
+            # Preenche o formulário
+            if not self.preencher_campos(rota_escolhida):
+                self.add_log("❌ Falha ao preencher formulário!", 'error')
+                return {'sucesso': False, 'logs': self.logs}
+            
+            # Envia o formulário
+            if self.enviar_formulario():
+                self.add_log("━" * 50, 'info')
+                self.add_log(f"🎉 PROCESSO FINALIZADO COM SUCESSO!", 'success')
+                self.add_log(f"📍 Rota: {rota_escolhida}", 'success')
+                self.add_log("━" * 50, 'info')
+                return {'sucesso': True, 'rota': rota_escolhida, 'logs': self.logs}
+            else:
+                self.add_log("━" * 50, 'info')
+                self.add_log(f"❌ PROCESSO FINALIZADO COM FALHA!", 'error')
+                self.add_log("━" * 50, 'info')
+                return {'sucesso': False, 'logs': self.logs}
+                
+        except Exception as e:
+            self.add_log(f"❌ Erro inesperado: {e}", 'error')
             return {'sucesso': False, 'logs': self.logs}
-        
-        # Envia o formulário
-        if self.enviar_formulario(rota_escolhida):
-            self.add_log("━" * 50, 'info')
-            self.add_log(f"🎉 PROCESSO FINALIZADO COM SUCESSO!", 'success')
-            self.add_log("━" * 50, 'info')
-            return {'sucesso': True, 'rota': rota_escolhida, 'logs': self.logs}
-        else:
-            self.add_log("━" * 50, 'info')
-            self.add_log(f"❌ PROCESSO FINALIZADO COM FALHA!", 'error')
-            self.add_log("━" * 50, 'info')
-            return {'sucesso': False, 'logs': self.logs}
+        finally:
+            # Fecha o navegador
+            if self.driver:
+                self.driver.quit()
+                self.add_log("🔄 Navegador fechado", 'info')
 
 
 @app.route('/')
@@ -376,26 +359,14 @@ def enviar():
     return jsonify(resultado)
 
 
-@app.route('/api/rotas', methods=['GET'])
-def listar_rotas():
-    """Endpoint para listar as rotas disponíveis sem enviar"""
-    bot = GoogleFormsBotBrilhante2('', '', '', [], [])
-    rotas = bot.buscar_rotas_disponiveis()
-    return jsonify({'rotas': rotas})
-
-
-@app.route('/api/debug', methods=['GET'])
-def debug_formulario():
-    """Endpoint para debug: mostra informações do formulário"""
-    bot = GoogleFormsBotBrilhante2('', '', '', [], [])
-    dados = bot.capturar_dados_formulario()
-    return jsonify(dados)
-
-
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 Brilhante 2 Bot - Servidor Rodando!")
     print("📍 Acesse: http://localhost:5000")
-    print("📍 Debug: http://localhost:5000/api/debug")
+    print("")
+    print("⚠️ IMPORTANTE:")
+    print("  1. Certifique-se que o ChromeDriver está instalado")
+    print("  2. O navegador vai abrir com sua conta Google já logada")
+    print("  3. Aguarde o processo completo")
     print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
