@@ -1,12 +1,10 @@
 from flask import Flask, render_template, jsonify, request
-from playwright.sync_api import sync_playwright
 import requests
 import re
 import json
 import logging
 from datetime import datetime
 import time
-import os
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +29,6 @@ class GoogleFormsBotBrilhante2:
         
         self.session = requests.Session()
         self.logs = []
-        self.cookies_headers = None
     
     def add_log(self, message, tipo='info'):
         log_entry = {
@@ -42,101 +39,65 @@ class GoogleFormsBotBrilhante2:
         self.logs.append(log_entry)
         print(f"[{tipo.upper()}] {message}")
     
-    def capturar_cookies_playwright(self):
-        """Captura cookies e headers usando Playwright (rápido)"""
-        self.add_log("🔍 Capturando autenticação...", 'info')
-        
-        try:
-            with sync_playwright() as p:
-                # Lança navegador headless (mais rápido que Selenium)
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=['--no-sandbox', '--disable-dev-shm-usage']
-                )
-                context = browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                )
-                page = context.new_page()
-                
-                # Acessa o formulário
-                start_time = time.time()
-                page.goto(self.view_url, wait_until='domcontentloaded')
-                
-                # Aguarda o radiogroup carregar (máximo 5 segundos)
-                try:
-                    page.wait_for_selector('div[role="radiogroup"]', timeout=5000)
-                except:
-                    self.add_log("⚠️ Tempo limite ao carregar formulário, mas continuando...", 'warning')
-                
-                elapsed = time.time() - start_time
-                self.add_log(f"⏱️  Formulário carregado em {elapsed:.2f}s", 'info')
-                
-                # 1. Captura todos os cookies
-                cookies = context.cookies()
-                cookies_dict = {}
-                for cookie in cookies:
-                    cookies_dict[cookie['name']] = cookie['value']
-                
-                # 2. Captura o fbzx
-                html = page.content()
-                fbzx_match = re.search(r'fbzx" value="([^"]+)"', html)
-                if fbzx_match:
-                    cookies_dict['fbzx'] = fbzx_match.group(1)
-                    self.add_log(f"🔑 fbzx: {cookies_dict['fbzx'][:20]}...", 'info')
-                
-                # 3. Captura o token (se existir)
-                token_match = re.search(r'token" value="([^"]+)"', html)
-                if token_match:
-                    cookies_dict['token'] = token_match.group(1)
-                    self.add_log(f"🔑 token: {cookies_dict['token'][:20]}...", 'info')
-                
-                # 4. Captura as rotas disponíveis (já aproveita)
-                rotas = []
-                opcoes = page.query_selector_all('div[role="radio"]')
-                for opcao in opcoes:
-                    data_value = opcao.get_attribute('data-value')
-                    if data_value and data_value != '.' and data_value not in rotas:
-                        rotas.append(data_value)
-                
-                # 5. Prepara headers de autenticação
-                self.cookies_headers = {
-                    'cookies': cookies_dict,
-                    'rotas': rotas,
-                    'html': html
-                }
-                
-                browser.close()
-                
-                self.add_log(f"✅ {len(cookies_dict)} cookies e {len(rotas)} rotas capturadas!", 'success')
-                return True
-                
-        except Exception as e:
-            self.add_log(f"❌ Erro ao capturar cookies: {e}", 'error')
-            return False
-    
     def buscar_rotas_disponiveis(self):
-        """Retorna as rotas já capturadas (sem nova requisição)"""
-        if self.cookies_headers and 'rotas' in self.cookies_headers:
-            rotas = self.cookies_headers['rotas']
+        """Busca as rotas disponíveis no formulário"""
+        try:
+            # Headers para simular navegador
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            
+            response = self.session.get(self.view_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            html = response.text
+            
+            rotas = []
+            
+            # Busca via FB_PUBLIC_LOAD_DATA_
+            fb_match = re.search(r'FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);', html, re.DOTALL)
+            if fb_match:
+                try:
+                    data = json.loads(fb_match.group(1))
+                    if data and len(data) > 1 and data[1]:
+                        questions = data[1][1] if len(data[1]) > 1 else []
+                        for question in questions:
+                            if question and isinstance(question, list):
+                                titulo = str(question[0]) if len(question) > 0 and question[0] else ""
+                                if 'rota' in titulo.lower() or 'selecione' in titulo.lower():
+                                    if len(question) > 4 and question[4]:
+                                        for opt in question[4]:
+                                            if opt and isinstance(opt, list) and len(opt) > 0:
+                                                rota = opt[0] if opt[0] else (opt[1] if len(opt) > 1 else None)
+                                                if rota and rota != '.' and rota not in rotas and len(str(rota)) > 2:
+                                                    rotas.append(str(rota))
+                except Exception as e:
+                    pass
+            
+            rotas = list(dict.fromkeys(rotas))
+            
             if rotas:
-                self.add_log(f"📋 {len(rotas)} rotas disponíveis", 'info')
+                self.add_log(f"✅ {len(rotas)} rotas encontradas!", 'success')
                 for i, rota in enumerate(rotas, 1):
                     self.add_log(f"  {i}. {rota}", 'info')
-                return rotas
-        
-        # Fallback: tenta capturar novamente
-        if self.capturar_cookies_playwright():
-            return self.cookies_headers.get('rotas', [])
-        
-        return []
+            else:
+                self.add_log("⚠️ Nenhuma rota encontrada!", 'warning')
+                # Salva HTML para debug
+                with open('debug_form.html', 'w', encoding='utf-8') as f:
+                    f.write(html)
+                self.add_log("📁 HTML salvo em 'debug_form.html'", 'info')
+            
+            return rotas
+            
+        except Exception as e:
+            self.add_log(f"❌ Erro ao buscar rotas: {e}", 'error')
+            return []
     
     def selecionar_melhor_rota(self, rotas):
         if not rotas:
             return None
         
-        self.add_log("🔍 Selecionando melhor rota...", 'info')
+        self.add_log("🔍 Analisando rotas...", 'info')
         
-        # Filtra bloqueadas
         rotas_liberadas = []
         for rota in rotas:
             bloqueada = False
@@ -153,7 +114,6 @@ class GoogleFormsBotBrilhante2:
             self.add_log("❌ Todas as rotas foram bloqueadas!", 'error')
             return None
         
-        # Tenta prioridades
         for palavra in self.palavras_prioritarias:
             for rota in rotas_liberadas:
                 if palavra.lower() in rota.lower():
@@ -161,24 +121,27 @@ class GoogleFormsBotBrilhante2:
                     return rota
         
         rota = rotas_liberadas[0]
-        self.add_log(f"⚠️ Usando primeira disponível: {rota}", 'warning')
+        self.add_log(f"⚠️ Usando primeira: {rota}", 'warning')
         return rota
     
+    def capturar_fbzx(self):
+        """Captura o token fbzx da página"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = self.session.get(self.view_url, headers=headers, timeout=10)
+            match = re.search(r'fbzx" value="([^"]+)"', response.text)
+            return match.group(1) if match else None
+        except Exception:
+            return None
+    
     def enviar_formulario(self, rota):
-        """Envia o formulário usando requests (ultrarrápido)"""
+        """Envia o formulário usando requests"""
         
-        if not self.cookies_headers:
-            self.add_log("⚠️ Capturando autenticação...", 'warning')
-            if not self.capturar_cookies_playwright():
-                return False
+        # Captura fbzx
+        fbzx = self.capturar_fbzx()
         
-        cookies = self.cookies_headers.get('cookies', {})
-        
-        # Adiciona cookies à sessão
-        for nome, valor in cookies.items():
-            self.session.cookies.set(nome, valor)
-        
-        # Monta payload
         payload = {
             self.ENTRY_EMAIL: self.email,
             self.ENTRY_DRIVER_ID: self.driver_id,
@@ -188,14 +151,12 @@ class GoogleFormsBotBrilhante2:
             'pageHistory': '0'
         }
         
-        # Adiciona fbzx se tiver
-        if 'fbzx' in cookies:
-            payload['fbzx'] = cookies['fbzx']
+        if fbzx:
+            payload['fbzx'] = fbzx
+            self.add_log(f"🔑 fbzx: {fbzx[:20]}...", 'info')
+        else:
+            self.add_log("⚠️ fbzx não encontrado!", 'warning')
         
-        if 'token' in cookies:
-            payload['token'] = cookies['token']
-        
-        # Headers
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -203,15 +164,10 @@ class GoogleFormsBotBrilhante2:
             'Content-Type': 'application/x-www-form-urlencoded',
             'Origin': 'https://docs.google.com',
             'Referer': self.view_url,
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
             'Upgrade-Insecure-Requests': '1',
         }
         
-        self.add_log(f"📤 Enviando formulário...", 'info')
-        
-        start_time = time.time()
+        self.add_log(f"📤 Enviando formulário com rota: {rota}", 'info')
         
         try:
             response = self.session.post(
@@ -219,13 +175,10 @@ class GoogleFormsBotBrilhante2:
                 data=payload,
                 headers=headers,
                 allow_redirects=False,
-                timeout=10
+                timeout=30
             )
             
-            elapsed = time.time() - start_time
             status = response.status_code
-            
-            self.add_log(f"⏱️  Envio completado em {elapsed:.2f}s", 'info')
             self.add_log(f"📊 Status HTTP: {status}", 'info')
             
             if status in [200, 301, 302]:
@@ -234,11 +187,14 @@ class GoogleFormsBotBrilhante2:
                 return True
             else:
                 self.add_log(f"❌ Falha no envio. Status: {status}", 'error')
+                
+                # Diagnóstico do erro 401
                 if status == 401:
-                    self.add_log("🔄 Tentando renovar autenticação...", 'warning')
-                    self.cookies_headers = None
-                    if self.capturar_cookies_playwright():
-                        return self.enviar_formulario(rota)
+                    self.add_log("🔧 Diagnóstico do erro 401:", 'warning')
+                    self.add_log("  - O formulário exige login", 'warning')
+                    self.add_log("  - Você precisa estar logado no navegador", 'warning')
+                    self.add_log("  - Tente abrir o formulário no navegador e depois execute o bot", 'warning')
+                
                 return False
                 
         except Exception as e:
@@ -246,48 +202,41 @@ class GoogleFormsBotBrilhante2:
             return False
     
     def executar(self):
-        """Executa o bot completo (otimizado para velocidade)"""
+        """Executa o bot completo"""
         self.logs = []
-        tempo_total = time.time()
-        
-        self.add_log("━" * 40, 'info')
-        self.add_log("🚀 Brilhante 2 Bot (Modo Rápido)", 'info')
-        self.add_log("━" * 40, 'info')
+        self.add_log("━" * 50, 'info')
+        self.add_log("🚀 Brilhante 2 Bot (Requests)", 'info')
+        self.add_log("━" * 50, 'info')
         self.add_log(f"📧 Email: {self.email}", 'info')
         self.add_log(f"🆔 Driver ID: {self.driver_id}", 'info')
         self.add_log(f"📱 Telefone: {self.telefone}", 'info')
-        self.add_log("━" * 40, 'info')
+        self.add_log("━" * 50, 'info')
         
-        # Passo 1: Capturar autenticação e rotas (uma única vez)
-        if not self.cookies_headers:
-            if not self.capturar_cookies_playwright():
-                return {'sucesso': False, 'logs': self.logs}
+        # Busca rotas
+        rotas = self.buscar_rotas_disponiveis()
         
-        # Passo 2: Buscar rotas (já estão na memória)
-        rotas = self.cookies_headers.get('rotas', [])
         if not rotas:
             self.add_log("❌ Nenhuma rota disponível!", 'error')
             return {'sucesso': False, 'logs': self.logs}
         
-        # Passo 3: Selecionar melhor rota
+        # Seleciona rota
         rota_escolhida = self.selecionar_melhor_rota(rotas)
         
         if not rota_escolhida:
             self.add_log("❌ Nenhuma rota atende aos critérios!", 'error')
             return {'sucesso': False, 'logs': self.logs}
         
-        # Passo 4: Enviar formulário (requests - rápido)
+        # Envia
         if self.enviar_formulario(rota_escolhida):
-            self.add_log("━" * 40, 'info')
+            self.add_log("━" * 50, 'info')
             self.add_log(f"🎉 PROCESSO FINALIZADO COM SUCESSO!", 'success')
             self.add_log(f"📍 Rota: {rota_escolhida}", 'success')
-            self.add_log(f"⏱️  Tempo total: {time.time() - tempo_total:.2f}s", 'info')
-            self.add_log("━" * 40, 'info')
+            self.add_log("━" * 50, 'info')
             return {'sucesso': True, 'rota': rota_escolhida, 'logs': self.logs}
         else:
-            self.add_log("━" * 40, 'info')
+            self.add_log("━" * 50, 'info')
             self.add_log(f"❌ PROCESSO FINALIZADO COM FALHA!", 'error')
-            self.add_log("━" * 40, 'info')
+            self.add_log("━" * 50, 'info')
             return {'sucesso': False, 'logs': self.logs}
 
 
@@ -305,7 +254,7 @@ def enviar():
         driver_id=data.get('driverId', '163347'),
         telefone=data.get('telefone', '47996327935'),
         palavras_prioritarias = data.get('prioridades', ['CEDROS', 'NOVA ESPERANÇA', 'MONTE ALEGRE', 'NAÇÕES']),
-        palavras_bloqueadas = data.get('bloqueadas', ['BOTUVERÁ', 'GUABIRUBA', 'ITAIPAVA', 'BRUSQUE', 'MOTO', 'FIORINO', 'CENTRO'])
+        palavras_bloqueadas = data.get('bloqueadas', ['BOTUVERÁ', 'GUABIRUBA', 'ITAIPAVA', 'BRUSQUE', 'MOTO', 'FIORINO', 'CENTRO'])    
     )
     
     resultado = bot.executar()
@@ -314,8 +263,7 @@ def enviar():
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("🚀 Brilhante 2 Bot - Modo Rápido")
+    print("🚀 Brilhante 2 Bot - Servidor Rodando!")
     print("📍 Acesse: http://localhost:5000")
-    print("⏱️  Playwright (captura) + Requests (envio)")
     print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
