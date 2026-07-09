@@ -1,16 +1,12 @@
 FROM python:3.10-slim
 
-# Instala dependências do sistema necessárias para o Playwright
+# Apenas pacotes essenciais
 RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
+    libnss3 \
     libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libcups2 \
     libdrm2 \
     libgbm1 \
     libgtk-3-0 \
-    libnss3 \
     libx11-6 \
     libxcb1 \
     libxcomposite1 \
@@ -19,29 +15,23 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libxrandr2 \
     libxrender1 \
-    libxshmfence1 \
     libxtst6 \
     libasound2 \
-    fonts-liberation \
-    libappindicator1 \
-    xdg-utils \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Instala Playwright
-RUN pip install playwright && \
-    playwright install chromium
+# Instala Playwright e Flask
+RUN pip install --upgrade pip
+RUN pip install playwright==1.40.0
+RUN playwright install chromium
 
-# Copia o requirements e instala dependências Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Copia o resto do código
 COPY . .
 
-# Expõe a porta que o Render vai usar
 EXPOSE 5000
 
-# Comando para iniciar a aplicação
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000"]
