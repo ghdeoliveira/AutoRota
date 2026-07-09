@@ -260,7 +260,19 @@ def enviar():
     resultado = bot.executar()
     return jsonify(resultado)
 
-
+@app.route('/api/debug_html', methods=['GET'])
+def debug_html():
+    """Retorna o HTML salvo para análise"""
+    try:
+        with open('debug_form.html', 'r', encoding='utf-8') as f:
+            html = f.read()
+        return html[:5000]  # Primeiros 5000 caracteres
+    except FileNotFoundError:
+        return "Arquivo debug_form.html não encontrado. Execute o bot primeiro."
+    except Exception as e:
+        return f"Erro ao ler arquivo: {e}"
+    
+    
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 Brilhante 2 Bot - Servidor Rodando!")
