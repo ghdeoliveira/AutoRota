@@ -1,4 +1,3 @@
-# Usa a imagem oficial do Playwright com Python
 FROM mcr.microsoft.com/playwright/python:v1.40.0-focal
 
 # Define o diretório de instalação dos browsers
@@ -6,13 +5,14 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
-# 🔥 INSTALA O CHROMIUM DURANTE O BUILD (FORÇADO)
-RUN playwright install chromium
-
-# Copia e instala dependências Python
+# 🔥 PRIMEIRO: Instala as dependências Python (incluindo Playwright)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 🔥 SEGUNDO: Instala o Chromium (agora o Playwright já está instalado)
+RUN playwright install chromium
+
+# Copia o resto do código
 COPY . .
 
 EXPOSE 5000
