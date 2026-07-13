@@ -1,18 +1,12 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify
 from playwright.sync_api import sync_playwright
 import logging
 from datetime import datetime
 import time
-import os
-import json
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ============================================================
-# BOT BRILHANTE 2 - PLAYWRIGHT
-# ============================================================
 
 class Brilhante2Bot:
     def __init__(self):
@@ -20,7 +14,7 @@ class Brilhante2Bot:
         self.telefone = '47996327935'
         self.email = 'gho8885@gmail.com'
         
-        self.palavras_prioritarias = ['NOVA ESPERANÇA', 'CEDROS', 'MONTE ALEGRE', 'NAÇÕES']
+        self.palavras_prioritarias = ['CEDROS', 'NOVA ESPERANÇA', 'MONTE ALEGRE', 'NAÇÕES']
         self.palavras_bloqueadas = ['BOTUVERÁ', 'GUABIRUBA', 'ITAJAÍ', 'BRILHANTE', 'ITAIPAVA', 'BRUSQUE', 'MOTO', 'FIORINO', 'CENTRO']
         
         self.form_url = 'https://docs.google.com/forms/d/e/1FAIpQLSdUHqCbEnEtmcJgcIiJ0D4RrucqoFfc1Ve-YhPIdUgY4sZnbQ/viewform'
@@ -99,7 +93,6 @@ class Brilhante2Bot:
                 except:
                     self.add_log("⚠️ Timeout ao carregar, mas continuando...", 'warning')
                 
-                # Busca rotas
                 rotas = []
                 opcoes = page.query_selector_all('div[role="radio"]')
                 for opcao in opcoes:
@@ -124,7 +117,6 @@ class Brilhante2Bot:
                 
                 self.add_log(f"🎯 Rota escolhida: {rota_escolhida}", 'success')
                 
-                # Preenche campos
                 self.add_log("📝 Preenchendo formulário...", 'info')
                 
                 try:
@@ -169,15 +161,23 @@ class Brilhante2Bot:
             return {'sucesso': False, 'logs': self.ultimo_log}
 
 
-# ============================================================
-# FLASK - ROTAS
-# ============================================================
+# ═══════════════════════════════════════════════════════════
+# 🚀 FLASK - ROTAS
+# ═══════════════════════════════════════════════════════════
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/executar')
+@app.route('/api/status')
+def status():
+    return jsonify({
+        'status': 'online',
+        'timestamp': datetime.now().isoformat(),
+        'versao': 'Brilhante 2 Bot - Render'
+    })
+
+@app.route('/api/executar')  # ← ESTE É O ENDPOINT QUE FALTAVA!
 def executar_bot():
     try:
         bot = Brilhante2Bot()
@@ -194,25 +194,13 @@ def executar_bot():
             }]
         })
 
-@app.route('/api/status')
-def status():
-    return jsonify({
-        'status': 'online',
-        'timestamp': datetime.now().isoformat(),
-        'versao': 'Brilhante 2 Bot - Render'
-    })
-
-@app.route('/api/logs')
-def logs():
-    return jsonify({'logs': []})
-
-# ============================================================
-# EXECUÇÃO
-# ============================================================
+# ═══════════════════════════════════════════════════════════
+# 🏃 EXECUÇÃO
+# ═══════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 BRILHANTE 2 BOT - RENDER")
-    print("📍 Acesse: http://localhost:5000")
+    print("📍 Acesse: https://autorota.onrender.com")
     print("=" * 50)
     app.run(debug=False, host='0.0.0.0', port=5000)
