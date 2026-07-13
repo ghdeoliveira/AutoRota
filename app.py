@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request  # ← ADICIONEI request
 from playwright.sync_api import sync_playwright
 import logging
 from datetime import datetime
@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════
-# 🔧 MIDDLEWARE CORS (resolve o problema)
+# 🔧 MIDDLEWARE CORS
 # ═══════════════════════════════════════════════════════════
 @app.after_request
 def after_request(response):
