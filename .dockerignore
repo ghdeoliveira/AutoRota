@@ -17,5 +17,5 @@ env
 .gitignore
 *.log
 *.tmp
-debug_form.html
 debug_*.png
+*.html
