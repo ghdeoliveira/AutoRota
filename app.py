@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request  # ← ADICIONEI request
+from flask import Flask, render_template, jsonify, request
 from playwright.sync_api import sync_playwright
 import logging
 from datetime import datetime
@@ -9,13 +9,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════
-# 🔧 MIDDLEWARE CORS
+# 🔧 CONFIGURAÇÃO CORS (CORRIGIDA)
 # ═══════════════════════════════════════════════════════════
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    response.headers.add('Access-Control-Max-Age', '86400')  # Cache de 24h para preflight
     return response
 
 # ═══════════════════════════════════════════════════════════
