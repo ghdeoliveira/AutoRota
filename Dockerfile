@@ -1,4 +1,3 @@
-# Usa a imagem oficial do Playwright com Python
 FROM mcr.microsoft.com/playwright/python:v1.40.0-focal
 
 WORKDIR /app
@@ -8,6 +7,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# 🔥 INSTALA O CHROMIUM DURANTE O BUILD
+RUN playwright install chromium
 
 EXPOSE 5000
 
