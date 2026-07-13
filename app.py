@@ -1,10 +1,10 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from playwright.sync_api import sync_playwright
 import logging
 from datetime import datetime
 import time
 import os
-import threading
+import json
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +33,6 @@ class Brilhante2Bot:
             'type': tipo
         }
         self.ultimo_log.append(entry)
-        # Mantém apenas os últimos 50 logs
         if len(self.ultimo_log) > 50:
             self.ultimo_log = self.ultimo_log[-50:]
         
@@ -48,7 +47,6 @@ class Brilhante2Bot:
         if not rotas:
             return None
         
-        # Filtra bloqueadas
         liberadas = []
         for rota in rotas:
             bloqueada = False
@@ -63,7 +61,6 @@ class Brilhante2Bot:
             self.add_log("❌ Todas as rotas foram bloqueadas!", 'error')
             return None
         
-        # Prioridades
         for palavra in self.palavras_prioritarias:
             for rota in liberadas:
                 if palavra.upper() in rota.upper():
@@ -80,10 +77,6 @@ class Brilhante2Bot:
         self.add_log("🚀 INICIANDO BRILHANTE 2 BOT", 'info')
         self.add_log(f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 'info')
         self.add_log("━" * 40, 'info')
-        self.add_log(f"📧 Email: {self.email}", 'info')
-        self.add_log(f"🆔 Driver ID: {self.driver_id}", 'info')
-        self.add_log(f"📱 Telefone: {self.telefone}", 'info')
-        self.add_log("━" * 40, 'info')
         
         try:
             with sync_playwright() as p:
@@ -98,7 +91,7 @@ class Brilhante2Bot:
                 page = context.new_page()
                 
                 self.add_log("🌐 Acessando formulário...", 'info')
-                page.goto(self.form_url, wait_until='domcontentloaded')
+                page.goto(self.form_url, wait_until='domcontentloaded', timeout=30000)
                 
                 try:
                     page.wait_for_selector('div[role="radiogroup"]', timeout=15000)
@@ -123,7 +116,6 @@ class Brilhante2Bot:
                     browser.close()
                     return {'sucesso': False, 'logs': self.ultimo_log}
                 
-                # Seleciona rota
                 rota_escolhida = self.selecionar_melhor_rota(rotas)
                 if not rota_escolhida:
                     self.add_log("❌ Nenhuma rota atende aos critérios!", 'error')
@@ -135,21 +127,18 @@ class Brilhante2Bot:
                 # Preenche campos
                 self.add_log("📝 Preenchendo formulário...", 'info')
                 
-                # Driver ID
                 try:
                     page.fill('input[aria-labelledby="i5"]', self.driver_id)
                     self.add_log(f"  ✅ Driver ID: {self.driver_id}", 'success')
                 except:
                     page.fill('input[aria-label="Seu ID"]', self.driver_id)
                 
-                # Telefone
                 try:
                     page.fill('input[aria-labelledby="i10"]', self.telefone)
                     self.add_log(f"  ✅ Telefone: {self.telefone}", 'success')
                 except:
                     page.fill('input[aria-label="Seu telefone"]', self.telefone)
                 
-                # Seleciona rota
                 for opcao in page.query_selector_all('div[role="radio"]'):
                     data_value = opcao.get_attribute('data-value')
                     texto = opcao.text_content().strip()
@@ -158,12 +147,10 @@ class Brilhante2Bot:
                         self.add_log(f"  ✅ Rota selecionada", 'success')
                         break
                 
-                # Envia
                 self.add_log("📤 Enviando formulário...", 'info')
                 page.click('span:has-text("Enviar")')
                 time.sleep(3)
                 
-                # Verifica confirmação
                 if page.query_selector('text=Resposta enviada'):
                     self.add_log("✅ FORMULÁRIO ENVIADO COM SUCESSO!", 'success')
                 else:
@@ -178,25 +165,36 @@ class Brilhante2Bot:
                 return {'sucesso': True, 'rota': rota_escolhida, 'logs': self.ultimo_log}
                 
         except Exception as e:
-            self.add_log(f"❌ ERRO: {e}", 'error')
+            self.add_log(f"❌ ERRO: {str(e)}", 'error')
             return {'sucesso': False, 'logs': self.ultimo_log}
 
 
 # ============================================================
-# FLASK - INTERFACE WEB
+# FLASK - ROTAS
 # ============================================================
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/executar', methods=['GET'])
+@app.route('/api/executar')
 def executar_bot():
-    bot = Brilhante2Bot()
-    resultado = bot.executar()
-    return jsonify(resultado)
+    try:
+        bot = Brilhante2Bot()
+        resultado = bot.executar()
+        return jsonify(resultado)
+    except Exception as e:
+        return jsonify({
+            'sucesso': False,
+            'erro': str(e),
+            'logs': [{
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'message': f'❌ Erro: {str(e)}',
+                'type': 'error'
+            }]
+        })
 
-@app.route('/api/status', methods=['GET'])
+@app.route('/api/status')
 def status():
     return jsonify({
         'status': 'online',
@@ -204,6 +202,9 @@ def status():
         'versao': 'Brilhante 2 Bot - Render'
     })
 
+@app.route('/api/logs')
+def logs():
+    return jsonify({'logs': []})
 
 # ============================================================
 # EXECUÇÃO
@@ -213,6 +214,5 @@ if __name__ == '__main__':
     print("=" * 50)
     print("🚀 BRILHANTE 2 BOT - RENDER")
     print("📍 Acesse: http://localhost:5000")
-    print("📌 Para executar: GET /api/executar")
     print("=" * 50)
     app.run(debug=False, host='0.0.0.0', port=5000)
