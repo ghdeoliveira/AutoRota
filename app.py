@@ -8,6 +8,19 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ═══════════════════════════════════════════════════════════
+# 🔧 MIDDLEWARE CORS (resolve o problema)
+# ═══════════════════════════════════════════════════════════
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
+
+# ═══════════════════════════════════════════════════════════
+# 🤖 BOT
+# ═══════════════════════════════════════════════════════════
 class Brilhante2Bot:
     def __init__(self):
         self.driver_id = '163347'
@@ -177,8 +190,12 @@ def status():
         'versao': 'Brilhante 2 Bot - Render'
     })
 
-@app.route('/api/executar')  # ← ESTE É O ENDPOINT QUE FALTAVA!
+@app.route('/api/executar', methods=['GET', 'OPTIONS'])
 def executar_bot():
+    # Responde requisições OPTIONS (preflight) para CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         bot = Brilhante2Bot()
         resultado = bot.executar()
@@ -193,6 +210,7 @@ def executar_bot():
                 'type': 'error'
             }]
         })
+
 
 # ═══════════════════════════════════════════════════════════
 # 🏃 EXECUÇÃO
