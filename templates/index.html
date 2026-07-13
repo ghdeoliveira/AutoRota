@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Brilhante 2 - Bot Automático</title>
+    <title>🚚 Brilhante 2 - Bot Automático</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
                 <h1>🚚 Brilhante 2</h1>
                 <p>Bot Automático de Rotas</p>
             </div>
-            
+
             <div class="content">
                 <div class="config-section">
                     <h3>📋 Suas Informações</h3>
@@ -66,10 +66,22 @@
     </div>
 
     <script>
+        // ═══════════════════════════════════════════════════
+        // 🔧 CONFIGURAÇÃO DA API (detecta ambiente)
+        // ═══════════════════════════════════════════════════
+        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const API_URL = isLocal ? '/api/executar' : 'https://autorota.onrender.com/api/executar';
+
+        // ═══════════════════════════════════════════════════
+        // 📝 ELEMENTOS DO DOM
+        // ═══════════════════════════════════════════════════
         const btnEnviar = document.getElementById('btnEnviar');
         const btnLimpar = document.getElementById('btnLimpar');
         const logContent = document.getElementById('logContent');
 
+        // ═══════════════════════════════════════════════════
+        // 📋 FUNÇÃO PARA ADICIONAR LOG
+        // ═══════════════════════════════════════════════════
         function addLog(message, type = 'info') {
             const logEntry = document.createElement('div');
             logEntry.className = `log-entry ${type}`;
@@ -87,12 +99,17 @@
             addLog('✨ Log limpo', 'info');
         }
 
+        // ═══════════════════════════════════════════════════
+        // 🚀 FUNÇÃO PRINCIPAL - ENVIAR FORMULÁRIO
+        // ═══════════════════════════════════════════════════
         async function enviarFormulario() {
             btnEnviar.disabled = true;
             btnEnviar.textContent = '⏳ ENVIANDO...';
-            
+
             addLog('🚀 Iniciando Brilhante 2 Bot...', 'info');
-            
+            addLog(`🌐 API: ${API_URL}`, 'info');
+
+            // 🔥 Dados enviados para o backend (caso o bot precise)
             const dados = {
                 email: document.getElementById('email').value,
                 driverId: document.getElementById('driverId').value,
@@ -100,39 +117,88 @@
                 prioridades: document.getElementById('prioridades').value.split(',').map(p => p.trim()),
                 bloqueadas: document.getElementById('bloqueadas').value.split(',').map(b => b.trim())
             };
-            
+
             try {
-                const response = await fetch('/api/enviar', {
-                    method: 'POST',
+                const response = await fetch(API_URL, {
+                    method: 'GET', // <-- O bot não precisa de dados via POST, mas mantemos GET
                     headers: {
                         'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(dados)
+                        'Accept': 'application/json'
+                    }
                 });
-                
-                const resultado = await response.json();
-                
-                for (const log of resultado.logs) {
-                    addLog(log.message, log.type);
+
+                // 🔥 VERIFICA SE A RESPOSTA É JSON VÁLIDO
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    throw new Error(`Resposta não é JSON: ${text.substring(0, 100)}...`);
                 }
-                
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const resultado = await response.json();
+
+                // Exibe os logs do backend
+                if (resultado.logs) {
+                    for (const log of resultado.logs) {
+                        addLog(log.message, log.type);
+                    }
+                }
+
                 if (resultado.sucesso) {
                     addLog(`🎉 PROCESSO FINALIZADO COM SUCESSO!`, 'success');
+                    if (resultado.rota) {
+                        addLog(`📍 Rota escolhida: ${resultado.rota}`, 'success');
+                    }
                 } else {
                     addLog(`❌ PROCESSO FINALIZADO COM FALHA!`, 'error');
+                    if (resultado.erro) {
+                        addLog(`📝 Erro: ${resultado.erro}`, 'error');
+                    }
                 }
-                
+
             } catch (error) {
                 addLog(`❌ Erro de conexão: ${error.message}`, 'error');
-                addLog(`🔧 Certifique-se que o servidor Python está rodando!`, 'warning');
+                addLog(`🔧 Verifique se o servidor está rodando em: ${API_URL}`, 'warning');
+                addLog(`💡 Dica: Tente acessar a URL diretamente no navegador`, 'info');
             }
-            
+
             btnEnviar.disabled = false;
             btnEnviar.textContent = '🚀 ENVIAR FORMULÁRIO';
         }
-        
+
+        // ═══════════════════════════════════════════════════
+        // 📌 EVENT LISTENERS
+        // ═══════════════════════════════════════════════════
         btnEnviar.addEventListener('click', enviarFormulario);
         btnLimpar.addEventListener('click', limparLog);
+
+        // ═══════════════════════════════════════════════════
+        // 🔍 INICIALIZAÇÃO
+        // ═══════════════════════════════════════════════════
+        addLog(`🌐 Conectando à API: ${API_URL}`, 'info');
+        addLog('✨ Bot carregado. Clique em "ENVIAR FORMULÁRIO" para iniciar.', 'info');
+
+        // ═══════════════════════════════════════════════════
+        // 🧪 TESTE RÁPIDO DE CONEXÃO (opcional)
+        // ═══════════════════════════════════════════════════
+        async function testarConexao() {
+            try {
+                const response = await fetch(API_URL);
+                if (response.ok) {
+                    addLog('✅ Conexão com a API estabelecida!', 'success');
+                } else {
+                    addLog(`⚠️ API respondeu com status: ${response.status}`, 'warning');
+                }
+            } catch (e) {
+                addLog(`❌ Não foi possível conectar à API: ${e.message}`, 'error');
+            }
+        }
+
+        // Executa o teste de conexão automaticamente
+        setTimeout(testarConexao, 1000);
     </script>
 </body>
 </html>
